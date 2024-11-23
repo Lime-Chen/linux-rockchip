@@ -1,3 +1,11 @@
+linux-rockchip (6.1.0-1028.28) noble; urgency=medium
+
+  * add is cyber3588 aib borad
+  * add rk3588-cyber3588-aib.dts
+  * add dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3588-cyber3588-aib.dtb
+
+ -- Lemon1151 <smile1151@foxmail.com>  Sat, 16 Nov 2024 19:40:50 -0400
+
 linux-rockchip (6.1.0-1027.27) noble; urgency=medium
 
   * UBUNTU: Enable PPS line discipline
