@@ -1,3 +1,11 @@
+linux-rockchip (5.10.0-1013.13) noble; urgency=medium
+
+  * add is cyber3588 aib borad
+  * add rk3588-cyber3588-aib.dts
+  * add dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3588-cyber3588-aib.dtb
+
+ -- Lemon1151 <smile1151@foxmail.com>  Sat, 16 Nov 2024 19:40:50 -0400
+
 linux-rockchip (5.10.0-1012.12) jammy; urgency=medium
 
   * UBUNTU: Replace grub from recommends with u-boot-menu
