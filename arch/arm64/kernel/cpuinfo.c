@@ -49,28 +49,33 @@ static const char *implementor_names[] = {
      implementor_names[midr] : "Unknown"
 
 // Part number to name mapping for ARM Ltd. and other specific manufacturers
-static const char *partnum_to_name(u32 implementor, u32 partnum) {
-    switch (implementor) {
-        case 0x41: // ARM Ltd.
-            switch (partnum) {
-                case 0xD03: return "Cortex-A53";
-                case 0xD07: return "Cortex-A57";
-                case 0xD08: return "Cortex-A72";
-                case 0xD09: return "Cortex-A55";  // Cortex-A55
-                case 0xD0A: return "Cortex-A73";  // Cortex-A73
-                case 0xD0B: return "Cortex-A75";  // Cortex-A75
-                case 0xD0C: return "Cortex-A76";  // Cortex-A76
-                case 0xD0D: return "Cortex-A77";  // Cortex-A77
-                case 0xD0E: return "Cortex-A78";  // Cortex-A78
-                case 0xD40: return "Cortex-A710"; // Cortex-A710
-                case 0xD41: return "Cortex-A715"; // Cortex-A715
-                case 0xD42: return "Cortex-A720"; // Cortex-A720
-                default: break;
-            }
-            break;
-        // Add cases for other implementors here...
-        default:
-            break;
+static const struct cpu_part_map {
+    u32 implementor;
+    u32 partnum;
+    const char *name;
+} cpu_core_map[] = {
+    { 0x41, 0xD03, "Cortex-A53" },
+    { 0x41, 0xD07, "Cortex-A57" },
+    { 0x41, 0xD08, "Cortex-A72" },
+    { 0x41, 0xD09, "Cortex-A55" },  // Cortex-A55
+    { 0x41, 0xD0A, "Cortex-A73" },  // Cortex-A73
+    { 0x41, 0xD0B, "Cortex-A75" },  // Cortex-A75
+    { 0x41, 0xD0C, "Cortex-A76" },  // Cortex-A76
+    { 0x41, 0xD0D, "Cortex-A77" },  // Cortex-A77
+    { 0x41, 0xD0E, "Cortex-A78" },  // Cortex-A78
+    { 0x41, 0xD40, "Cortex-A710" }, // Cortex-A710
+    { 0x41, 0xD41, "Cortex-A715" }, // Cortex-A715
+    { 0x41, 0xD42, "Cortex-A720" }, // Cortex-A720
+    // Add more cores as needed...
+};
+
+#define NUM_CPU_CORES (sizeof(cpu_core_map) / sizeof(cpu_core_map[0]))
+
+static const char *get_cpu_core_name(u32 implementor, u32 partnum) {
+    for (int i = 0; i < NUM_CPU_CORES; i++) {
+        if (cpu_core_map[i].implementor == implementor && cpu_core_map[i].partnum == partnum) {
+            return cpu_core_map[i].name;
+        }
     }
     return "Unknown";
 }
@@ -235,11 +240,10 @@ static const char *const compat_hwcap2_str[] = {
 static int c_show(struct seq_file *m, void *v)
 {
     int i;
-    struct device_node *np;
-    const char *cpu_model;
     bool compat = personality(current->personality) == PER_LINUX32 || is_compat_task();
     char model_name[256] = "";
-    bool has_a76 = false, has_a55 = false;
+    char cores_str[128] = "";
+    int len = 0;
 
     // First pass to gather information about the CPU cores and detect platform model
     const char *platform_model = get_cpu_model_from_dt();
@@ -250,32 +254,19 @@ static int c_show(struct seq_file *m, void *v)
         u32 implementor = MIDR_IMPLEMENTOR(midr);
         u32 partnum = MIDR_PARTNUM(midr);
 
-        // Check if the CPU core is from ARM (implementor 0x41)
-        if (implementor == 0x41) {
-            switch (partnum) {
-                case 0xD0C: // Cortex-A76
-                    has_a76 = true;
-                    break;
-                case 0xD09: // Cortex-A55
-                    has_a55 = true;
-                    break;
-                // Add cases for other known ARM cores here...
-                default:
-                    break;
-            }
+        const char *core_name = get_cpu_core_name(implementor, partnum);
+        if (strcmp(core_name, "Unknown") != 0) {
+            len += snprintf(cores_str + len, sizeof(cores_str) - len, "%s+", core_name);
         }
     }
 
-    // Construct detailed model name string based on detected cores and platform model
-    if (has_a76 && has_a55) {
-        snprintf(model_name, sizeof(model_name), "%s (Cortex-A76+Cortex-A55)x8", platform_model);
-    } else if (has_a76) {
-        snprintf(model_name, sizeof(model_name), "%s (Cortex-A76)x8", platform_model);
-    } else if (has_a55) {
-        snprintf(model_name, sizeof(model_name), "%s (Cortex-A55)x8", platform_model);
-    } else {
-        snprintf(model_name, sizeof(model_name), "%s", platform_model);
+    // Remove trailing '+' if present
+    if (len > 0 && cores_str[len-1] == '+') {
+        cores_str[len-1] = '\0';
     }
+
+    snprintf(model_name, sizeof(model_name), "%s (%s)x%d", 
+             platform_model, cores_str, num_online_cpus());
 
     // Second pass to print individual processor details and the aggregated model name
     for_each_online_cpu(i) {
@@ -285,6 +276,7 @@ static int c_show(struct seq_file *m, void *v)
         u32 partnum = MIDR_PARTNUM(midr);
         u32 variant = MIDR_VARIANT(midr);
         u32 revision = MIDR_REVISION(midr);
+        const char *core_name = get_cpu_core_name(implementor, partnum);
 
         /*
          * glibc reads /proc/cpuinfo to determine the number of
@@ -322,16 +314,10 @@ static int c_show(struct seq_file *m, void *v)
         }
         seq_puts(m, "\n");
 
-        np = of_find_node_by_path("/system");
-        if (np) {
-            if (!of_property_read_string(np, "cpu,model", &cpu_model))
-                seq_printf(m, "cpu model\t: %s\n", cpu_model);
-            of_node_put(np);
-        }
-        seq_printf(m, "CPU implementer\t: 0x%02x\n", implementor);
+        seq_printf(m, "CPU implementer\t: %s (0x%02x)\n", IMPLEMENTOR_NAME(implementor), implementor);
         seq_printf(m, "CPU architecture: 8\n");
         seq_printf(m, "CPU variant\t: 0x%x\n", variant);
-        seq_printf(m, "CPU part\t: 0x%03x\n", partnum);
+        seq_printf(m, "CPU part\t: 0x%03x (%s)\n", partnum, core_name);
         seq_printf(m, "CPU revision\t: %d\n\n", revision);
     }
 
