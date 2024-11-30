@@ -1,3 +1,9 @@
+linux-rockchip (6.1.0-1030.30) noble; urgency=medium
+
+  * cpuinfo: Optimize CPU display rules to specifically show the CPU model
+
+ -- Lemon1151 <smile1151@foxmail.com>  Sat, 30 Nov 2024 11:40:50 -0400
+
 linux-rockchip (6.1.0-1029.29) noble; urgency=medium
 
   * cpuinfo：Modify the model name display rule in cpuinfo.c
