@@ -26,81 +26,6 @@
 #include <linux/delay.h>
 #include <linux/of_platform.h>
 
-// Define macros to extract fields from MIDR
-#define MIDR_IMPLEMENTOR(m) (((m) >> 24) & 0xFF)
-#define MIDR_PARTNUM(m)     (((m) >> 4) & 0xFFF)
-#define MIDR_VARIANT(m)     (((m) >> 20) & 0xF)
-#define MIDR_REVISION(m)    ((m) & 0xF)
-
-// Implementor name mapping for specific manufacturers
-static const char *implementor_names[] = {
-    [0x41] = "ARM",        // ARM Ltd.
-    [0x42] = "Broadcom",   // Broadcom Corporation
-    [0x48] = "HiSilicon",  // HiSilicon Technologies Co., Ltd. (华为海思)
-    [0x51] = "Qualcomm",   // Qualcomm Technologies, Inc.
-    [0x70] = "MediaTek",   // MediaTek Inc.
-    [0x50] = "Rockchip",   // Rockchip
-    [0x1F] = "Allwinner",  // Allwinner Technology Co., Ltd.
-    [0x1D] = "Amlogic",    // Amlogic Inc.
-};
-
-#define IMPLEMENTOR_NAME(midr) \
-    ((midr) < ARRAY_SIZE(implementor_names) && implementor_names[midr]) ? \
-     implementor_names[midr] : "Unknown"
-
-// Part number to name mapping for ARM Ltd. and other specific manufacturers
-static const struct cpu_part_map {
-    u32 implementor;
-    u32 partnum;
-    const char *name;
-} cpu_core_map[] = {
-    { 0x41, 0xD03, "Cortex-A53" },
-    { 0x41, 0xD07, "Cortex-A57" },
-    { 0x41, 0xD08, "Cortex-A72" },
-    { 0x41, 0xD09, "Cortex-A55" },  // Cortex-A55
-    { 0x41, 0xD0A, "Cortex-A73" },  // Cortex-A73
-    { 0x41, 0xD0B, "Cortex-A75" },  // Cortex-A75
-    { 0x41, 0xD0C, "Cortex-A76" },  // Cortex-A76
-    { 0x41, 0xD0D, "Cortex-A77" },  // Cortex-A77
-    { 0x41, 0xD0E, "Cortex-A78" },  // Cortex-A78
-    { 0x41, 0xD40, "Cortex-A710" }, // Cortex-A710
-    { 0x41, 0xD41, "Cortex-A715" }, // Cortex-A715
-    { 0x41, 0xD42, "Cortex-A720" }, // Cortex-A720
-    // Add more cores as needed...
-};
-
-#define NUM_CPU_CORES (sizeof(cpu_core_map) / sizeof(cpu_core_map[0]))
-
-static const char *get_cpu_core_name(u32 implementor, u32 partnum) {
-    for (int i = 0; i < NUM_CPU_CORES; i++) {
-        if (cpu_core_map[i].implementor == implementor && cpu_core_map[i].partnum == partnum) {
-            return cpu_core_map[i].name;
-        }
-    }
-    return "Unknown";
-}
-
-static const char *get_cpu_model_from_dt(void)
-{
-    struct device_node *np;
-    const char *model = "Unknown";
-
-    np = of_find_node_by_path("/cpus");
-    if (np) {
-        // Iterate over all CPU nodes to find a compatible string
-        for_each_child_of_node(np, struct device_node *cpu_np) {
-            const char *compatible;
-            if (!of_property_read_string(cpu_np, "compatible", &compatible)) {
-                model = compatible;
-                break; // Assume all CPUs have the same compatible string
-            }
-        }
-        of_node_put(np);
-    }
-
-    return model;
-}
-
 unsigned int system_serial_low;
 EXPORT_SYMBOL(system_serial_low);
 
@@ -239,92 +164,82 @@ static const char *const compat_hwcap2_str[] = {
 
 static int c_show(struct seq_file *m, void *v)
 {
-    int i;
-    bool compat = personality(current->personality) == PER_LINUX32 || is_compat_task();
-    char model_name[256] = "";
-    char cores_str[128] = "";
-    int len = 0;
+	int i, j;
+	struct device_node *np;
+	const char *cpu_model;
 
-    // First pass to gather information about the CPU cores and detect platform model
-    const char *platform_model = get_cpu_model_from_dt();
+	bool compat = personality(current->personality) == PER_LINUX32 ||
+		      is_compat_task();
 
-    for_each_online_cpu(i) {
-        struct cpuinfo_arm64 *cpuinfo = &per_cpu(cpu_data, i);
-        u32 midr = cpuinfo->reg_midr;
-        u32 implementor = MIDR_IMPLEMENTOR(midr);
-        u32 partnum = MIDR_PARTNUM(midr);
+	for_each_online_cpu(i) {
+		struct cpuinfo_arm64 *cpuinfo = &per_cpu(cpu_data, i);
+		u32 midr = cpuinfo->reg_midr;
 
-        const char *core_name = get_cpu_core_name(implementor, partnum);
-        if (strcmp(core_name, "Unknown") != 0) {
-            len += snprintf(cores_str + len, sizeof(cores_str) - len, "%s+", core_name);
-        }
-    }
+		/*
+		 * glibc reads /proc/cpuinfo to determine the number of
+		 * online processors, looking for lines beginning with
+		 * "processor".  Give glibc what it expects.
+		 */
+		seq_printf(m, "processor\t: %d\n", i);
+		/*if (compat)*/
+		seq_printf(m, "model name\t: Rockchip RK3588 %d @2.4GHz/1.8GHz (%s)\n",
+			   MIDR_REVISION(midr), COMPAT_ELF_PLATFORM);
 
-    // Remove trailing '+' if present
-    if (len > 0 && cores_str[len-1] == '+') {
-        cores_str[len-1] = '\0';
-    }
+		seq_printf(m, "BogoMIPS\t: %lu.%02lu\n",
+			   loops_per_jiffy / (500000UL/HZ),
+			   loops_per_jiffy / (5000UL/HZ) % 100);
 
-    snprintf(model_name, sizeof(model_name), "%s (%s)x%d", 
-             platform_model, cores_str, num_online_cpus());
-
-    // Second pass to print individual processor details and the aggregated model name
-    for_each_online_cpu(i) {
-        struct cpuinfo_arm64 *cpuinfo = &per_cpu(cpu_data, i);
-        u32 midr = cpuinfo->reg_midr;
-        u32 implementor = MIDR_IMPLEMENTOR(midr);
-        u32 partnum = MIDR_PARTNUM(midr);
-        u32 variant = MIDR_VARIANT(midr);
-        u32 revision = MIDR_REVISION(midr);
-        const char *core_name = get_cpu_core_name(implementor, partnum);
-
-        /*
-         * glibc reads /proc/cpuinfo to determine the number of
-         * online processors, looking for lines beginning with
-         * "processor".  Give glibc what it expects.
-         */
-        seq_printf(m, "processor\t: %d\n", i);
-
-        // Output detailed model name information
-        seq_printf(m, "model name\t: %s\n", model_name);
-
-        seq_printf(m, "BogoMIPS\t: %lu.%02lu\n",
-                   loops_per_jiffy / (500000UL/HZ),
-                   loops_per_jiffy / (5000UL/HZ) % 100);
-
-        seq_puts(m, "Features\t:");
-        if (compat) {
+		/*
+		 * Dump out the common processor features in a single line.
+		 * Userspace should read the hwcaps with getauxval(AT_HWCAP)
+		 * rather than attempting to parse this, but there's a body of
+		 * software which does already (at least for 32-bit).
+		 */
+		seq_puts(m, "Features\t:");
+		if (compat) {
 #ifdef CONFIG_COMPAT
-            for (int j = 0; j < ARRAY_SIZE(compat_hwcap_str); j++) {
-                if (compat_elf_hwcap & (1 << j)) {
-                    if (WARN_ON_ONCE(!compat_hwcap_str[j]))
-                        continue;
-                    seq_printf(m, " %s", compat_hwcap_str[j]);
-                }
-            }
+			for (j = 0; j < ARRAY_SIZE(compat_hwcap_str); j++) {
+				if (compat_elf_hwcap & (1 << j)) {
+					/*
+					 * Warn once if any feature should not
+					 * have been present on arm64 platform.
+					 */
+					if (WARN_ON_ONCE(!compat_hwcap_str[j]))
+						continue;
 
-            for (int j = 0; j < ARRAY_SIZE(compat_hwcap2_str); j++)
-                if (compat_elf_hwcap2 & (1 << j))
-                    seq_printf(m, " %s", compat_hwcap2_str[j]);
+					seq_printf(m, " %s", compat_hwcap_str[j]);
+				}
+			}
+
+			for (j = 0; j < ARRAY_SIZE(compat_hwcap2_str); j++)
+				if (compat_elf_hwcap2 & (1 << j))
+					seq_printf(m, " %s", compat_hwcap2_str[j]);
 #endif /* CONFIG_COMPAT */
-        } else {
-            for (int j = 0; j < ARRAY_SIZE(hwcap_str); j++)
-                if (cpu_have_feature(j))
-                    seq_printf(m, " %s", hwcap_str[j]);
-        }
-        seq_puts(m, "\n");
+		} else {
+			for (j = 0; j < ARRAY_SIZE(hwcap_str); j++)
+				if (cpu_have_feature(j))
+					seq_printf(m, " %s", hwcap_str[j]);
+		}
+		seq_puts(m, "\n");
 
-        seq_printf(m, "CPU implementer\t: %s (0x%02x)\n", IMPLEMENTOR_NAME(implementor), implementor);
-        seq_printf(m, "CPU architecture: 8\n");
-        seq_printf(m, "CPU variant\t: 0x%x\n", variant);
-        seq_printf(m, "CPU part\t: 0x%03x (%s)\n", partnum, core_name);
-        seq_printf(m, "CPU revision\t: %d\n\n", revision);
-    }
+		np = of_find_node_by_path("/system");
+		if (np) {
+			if (!of_property_read_string(np, "cpu,model", &cpu_model))
+				seq_printf(m, "cpu model\t: %s\n", cpu_model);
+			of_node_put(np);
+		}
+		seq_printf(m, "CPU implementer\t: 0x%02x\n",
+			   MIDR_IMPLEMENTOR(midr));
+		seq_printf(m, "CPU architecture: 8\n");
+		seq_printf(m, "CPU variant\t: 0x%x\n", MIDR_VARIANT(midr));
+		seq_printf(m, "CPU part\t: 0x%03x\n", MIDR_PARTNUM(midr));
+		seq_printf(m, "CPU revision\t: %d\n\n", MIDR_REVISION(midr));
+	}
 
-    seq_printf(m, "Serial\t\t: %08x%08x\n",
-               system_serial_high, system_serial_low);
+	seq_printf(m, "Serial\t\t: %08x%08x\n",
+		   system_serial_high, system_serial_low);
 
-    return 0;
+	return 0;
 }
 
 static void *c_start(struct seq_file *m, loff_t *pos)
