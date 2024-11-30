@@ -75,6 +75,27 @@ static const char *partnum_to_name(u32 implementor, u32 partnum) {
     return "Unknown";
 }
 
+static const char *get_cpu_model_from_dt(void)
+{
+    struct device_node *np;
+    const char *model = "Unknown";
+
+    np = of_find_node_by_path("/cpus");
+    if (np) {
+        // Iterate over all CPU nodes to find a compatible string
+        for_each_child_of_node(np, struct device_node *cpu_np) {
+            const char *compatible;
+            if (!of_property_read_string(cpu_np, "compatible", &compatible)) {
+                model = compatible;
+                break; // Assume all CPUs have the same compatible string
+            }
+        }
+        of_node_put(np);
+    }
+
+    return model;
+}
+
 unsigned int system_serial_low;
 EXPORT_SYMBOL(system_serial_low);
 
@@ -213,88 +234,111 @@ static const char *const compat_hwcap2_str[] = {
 
 static int c_show(struct seq_file *m, void *v)
 {
-	int i, j;
-	struct device_node *np;
-	const char *cpu_model;
+    int i;
+    struct device_node *np;
+    const char *cpu_model;
+    bool compat = personality(current->personality) == PER_LINUX32 || is_compat_task();
+    char model_name[256] = "";
+    bool has_a76 = false, has_a55 = false;
 
-	bool compat = personality(current->personality) == PER_LINUX32 ||
-		      is_compat_task();
+    // First pass to gather information about the CPU cores and detect platform model
+    const char *platform_model = get_cpu_model_from_dt();
 
-	for_each_online_cpu(i) {
-		struct cpuinfo_arm64 *cpuinfo = &per_cpu(cpu_data, i);
-		u32 midr = cpuinfo->reg_midr;
-		u32 implementor = MIDR_IMPLEMENTOR(midr);
-		u32 partnum = MIDR_PARTNUM(midr);
-		u32 variant = MIDR_VARIANT(midr);
-		u32 revision = MIDR_REVISION(midr);
+    for_each_online_cpu(i) {
+        struct cpuinfo_arm64 *cpuinfo = &per_cpu(cpu_data, i);
+        u32 midr = cpuinfo->reg_midr;
+        u32 implementor = MIDR_IMPLEMENTOR(midr);
+        u32 partnum = MIDR_PARTNUM(midr);
 
-		/*
-		 * glibc reads /proc/cpuinfo to determine the number of
-		 * online processors, looking for lines beginning with
-		 * "processor".  Give glibc what it expects.
-		 */
-		seq_printf(m, "processor\t: %d\n", i);
+        // Check if the CPU core is from ARM (implementor 0x41)
+        if (implementor == 0x41) {
+            switch (partnum) {
+                case 0xD0C: // Cortex-A76
+                    has_a76 = true;
+                    break;
+                case 0xD09: // Cortex-A55
+                    has_a55 = true;
+                    break;
+                // Add cases for other known ARM cores here...
+                default:
+                    break;
+            }
+        }
+    }
 
-		// Output detailed model name information
-		seq_printf(m, "model name\t: %s %s rev %d (part number %X, variant %X)\n",
-			   IMPLEMENTOR_NAME(implementor),
-			   partnum_to_name(implementor, partnum),
-			   revision, partnum, variant);
+    // Construct detailed model name string based on detected cores and platform model
+    if (has_a76 && has_a55) {
+        snprintf(model_name, sizeof(model_name), "%s (Cortex-A76+Cortex-A55)x8", platform_model);
+    } else if (has_a76) {
+        snprintf(model_name, sizeof(model_name), "%s (Cortex-A76)x8", platform_model);
+    } else if (has_a55) {
+        snprintf(model_name, sizeof(model_name), "%s (Cortex-A55)x8", platform_model);
+    } else {
+        snprintf(model_name, sizeof(model_name), "%s", platform_model);
+    }
 
-		seq_printf(m, "BogoMIPS\t: %lu.%02lu\n",
-			   loops_per_jiffy / (500000UL/HZ),
-			   loops_per_jiffy / (5000UL/HZ) % 100);
+    // Second pass to print individual processor details and the aggregated model name
+    for_each_online_cpu(i) {
+        struct cpuinfo_arm64 *cpuinfo = &per_cpu(cpu_data, i);
+        u32 midr = cpuinfo->reg_midr;
+        u32 implementor = MIDR_IMPLEMENTOR(midr);
+        u32 partnum = MIDR_PARTNUM(midr);
+        u32 variant = MIDR_VARIANT(midr);
+        u32 revision = MIDR_REVISION(midr);
 
-		/*
-		 * Dump out the common processor features in a single line.
-		 * Userspace should read the hwcaps with getauxval(AT_HWCAP)
-		 * rather than attempting to parse this, but there's a body of
-		 * software which does already (at least for 32-bit).
-		 */
-		seq_puts(m, "Features\t:");
-		if (compat) {
+        /*
+         * glibc reads /proc/cpuinfo to determine the number of
+         * online processors, looking for lines beginning with
+         * "processor".  Give glibc what it expects.
+         */
+        seq_printf(m, "processor\t: %d\n", i);
+
+        // Output detailed model name information
+        seq_printf(m, "model name\t: %s\n", model_name);
+
+        seq_printf(m, "BogoMIPS\t: %lu.%02lu\n",
+                   loops_per_jiffy / (500000UL/HZ),
+                   loops_per_jiffy / (5000UL/HZ) % 100);
+
+        seq_puts(m, "Features\t:");
+        if (compat) {
 #ifdef CONFIG_COMPAT
-			for (j = 0; j < ARRAY_SIZE(compat_hwcap_str); j++) {
-				if (compat_elf_hwcap & (1 << j)) {
-					/*
-					 * Warn once if any feature should not
-					 * have been present on arm64 platform.
-					 */
-					if (WARN_ON_ONCE(!compat_hwcap_str[j]))
-						continue;
+            for (int j = 0; j < ARRAY_SIZE(compat_hwcap_str); j++) {
+                if (compat_elf_hwcap & (1 << j)) {
+                    if (WARN_ON_ONCE(!compat_hwcap_str[j]))
+                        continue;
+                    seq_printf(m, " %s", compat_hwcap_str[j]);
+                }
+            }
 
-					seq_printf(m, " %s", compat_hwcap_str[j]);
-				}
-			}
-
-			for (j = 0; j < ARRAY_SIZE(compat_hwcap2_str); j++)
-				if (compat_elf_hwcap2 & (1 << j))
-					seq_printf(m, " %s", compat_hwcap2_str[j]);
+            for (int j = 0; j < ARRAY_SIZE(compat_hwcap2_str); j++)
+                if (compat_elf_hwcap2 & (1 << j))
+                    seq_printf(m, " %s", compat_hwcap2_str[j]);
 #endif /* CONFIG_COMPAT */
-		} else {
-			for (j = 0; j < ARRAY_SIZE(hwcap_str); j++)
-				if (cpu_have_feature(j))
-					seq_printf(m, " %s", hwcap_str[j]);
-		}
-		seq_puts(m, "\n");
+        } else {
+            for (int j = 0; j < ARRAY_SIZE(hwcap_str); j++)
+                if (cpu_have_feature(j))
+                    seq_printf(m, " %s", hwcap_str[j]);
+        }
+        seq_puts(m, "\n");
 
-		np = of_find_node_by_path("/system");
-		if (np) {
-			if (!of_property_read_string(np, "cpu,model", &cpu_model))
-				seq_printf(m, "cpu model\t: %s\n", cpu_model);
-			of_node_put(np);
-		}
-		seq_printf(m, "CPU implementer\t: 0x%02x\n", implementor);
-		seq_printf(m, "CPU architecture: 8\n");
-		seq_printf(m, "CPU variant\t: 0x%x\n", variant);
-		seq_printf(m, "CPU part\t: 0x%03x\n", partnum);
-		seq_printf(m, "CPU revision\t: %d\n\n", revision);
-	}
+        np = of_find_node_by_path("/system");
+        if (np) {
+            if (!of_property_read_string(np, "cpu,model", &cpu_model))
+                seq_printf(m, "cpu model\t: %s\n", cpu_model);
+            of_node_put(np);
+        }
+        seq_printf(m, "CPU implementer\t: 0x%02x\n", implementor);
+        seq_printf(m, "CPU architecture: 8\n");
+        seq_printf(m, "CPU variant\t: 0x%x\n", variant);
+        seq_printf(m, "CPU part\t: 0x%03x\n", partnum);
+        seq_printf(m, "CPU revision\t: %d\n\n", revision);
+    }
 
-	seq_printf(m, "Serial\t\t: %08x%08x\n",
-		   system_serial_high, system_serial_low);
+    seq_printf(m, "Serial\t\t: %08x%08x\n",
+               system_serial_high, system_serial_low);
 
-	return 0;
+    return 0;
 }
 
 static void *c_start(struct seq_file *m, loff_t *pos)
