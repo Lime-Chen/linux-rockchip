@@ -26,6 +26,55 @@
 #include <linux/delay.h>
 #include <linux/of_platform.h>
 
+// Define macros to extract fields from MIDR
+#define MIDR_IMPLEMENTOR(m) (((m) >> 24) & 0xFF)
+#define MIDR_PARTNUM(m)     (((m) >> 4) & 0xFFF)
+#define MIDR_VARIANT(m)     (((m) >> 20) & 0xF)
+#define MIDR_REVISION(m)    ((m) & 0xF)
+
+// Implementor name mapping for specific manufacturers
+static const char *implementor_names[] = {
+    [0x41] = "ARM",        // ARM Ltd.
+    [0x42] = "Broadcom",   // Broadcom Corporation
+    [0x48] = "HiSilicon",  // HiSilicon Technologies Co., Ltd. (华为海思)
+    [0x51] = "Qualcomm",   // Qualcomm Technologies, Inc.
+    [0x70] = "MediaTek",   // MediaTek Inc.
+    [0x50] = "Rockchip",   // Rockchip
+    [0x1F] = "Allwinner",  // Allwinner Technology Co., Ltd.
+    [0x1D] = "Amlogic",    // Amlogic Inc.
+};
+
+#define IMPLEMENTOR_NAME(midr) \
+    ((midr) < ARRAY_SIZE(implementor_names) && implementor_names[midr]) ? \
+     implementor_names[midr] : "Unknown"
+
+// Part number to name mapping for ARM Ltd. and other specific manufacturers
+static const char *partnum_to_name(u32 implementor, u32 partnum) {
+    switch (implementor) {
+        case 0x41: // ARM Ltd.
+            switch (partnum) {
+                case 0xD03: return "Cortex-A53";
+                case 0xD07: return "Cortex-A57";
+                case 0xD08: return "Cortex-A72";
+                case 0xD09: return "Cortex-A55";  // Cortex-A55
+                case 0xD0A: return "Cortex-A73";  // Cortex-A73
+                case 0xD0B: return "Cortex-A75";  // Cortex-A75
+                case 0xD0C: return "Cortex-A76";  // Cortex-A76
+                case 0xD0D: return "Cortex-A77";  // Cortex-A77
+                case 0xD0E: return "Cortex-A78";  // Cortex-A78
+                case 0xD40: return "Cortex-A710"; // Cortex-A710
+                case 0xD41: return "Cortex-A715"; // Cortex-A715
+                case 0xD42: return "Cortex-A720"; // Cortex-A720
+                default: break;
+            }
+            break;
+        // Add cases for other implementors here...
+        default:
+            break;
+    }
+    return "Unknown";
+}
+
 unsigned int system_serial_low;
 EXPORT_SYMBOL(system_serial_low);
 
@@ -174,6 +223,10 @@ static int c_show(struct seq_file *m, void *v)
 	for_each_online_cpu(i) {
 		struct cpuinfo_arm64 *cpuinfo = &per_cpu(cpu_data, i);
 		u32 midr = cpuinfo->reg_midr;
+		u32 implementor = MIDR_IMPLEMENTOR(midr);
+		u32 partnum = MIDR_PARTNUM(midr);
+		u32 variant = MIDR_VARIANT(midr);
+		u32 revision = MIDR_REVISION(midr);
 
 		/*
 		 * glibc reads /proc/cpuinfo to determine the number of
@@ -181,9 +234,12 @@ static int c_show(struct seq_file *m, void *v)
 		 * "processor".  Give glibc what it expects.
 		 */
 		seq_printf(m, "processor\t: %d\n", i);
-		/* if (compat) */
-		seq_printf(m, "model name\t: ARMv8 Processor rev %d (%s)\n",
-			   MIDR_REVISION(midr), COMPAT_ELF_PLATFORM);
+
+		// Output detailed model name information
+		seq_printf(m, "model name\t: %s %s rev %d (part number %X, variant %X)\n",
+			   IMPLEMENTOR_NAME(implementor),
+			   partnum_to_name(implementor, partnum),
+			   revision, partnum, variant);
 
 		seq_printf(m, "BogoMIPS\t: %lu.%02lu\n",
 			   loops_per_jiffy / (500000UL/HZ),
@@ -228,12 +284,11 @@ static int c_show(struct seq_file *m, void *v)
 				seq_printf(m, "cpu model\t: %s\n", cpu_model);
 			of_node_put(np);
 		}
-		seq_printf(m, "CPU implementer\t: 0x%02x\n",
-			   MIDR_IMPLEMENTOR(midr));
+		seq_printf(m, "CPU implementer\t: 0x%02x\n", implementor);
 		seq_printf(m, "CPU architecture: 8\n");
-		seq_printf(m, "CPU variant\t: 0x%x\n", MIDR_VARIANT(midr));
-		seq_printf(m, "CPU part\t: 0x%03x\n", MIDR_PARTNUM(midr));
-		seq_printf(m, "CPU revision\t: %d\n\n", MIDR_REVISION(midr));
+		seq_printf(m, "CPU variant\t: 0x%x\n", variant);
+		seq_printf(m, "CPU part\t: 0x%03x\n", partnum);
+		seq_printf(m, "CPU revision\t: %d\n\n", revision);
 	}
 
 	seq_printf(m, "Serial\t\t: %08x%08x\n",
