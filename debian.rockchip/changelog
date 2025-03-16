@@ -1,3 +1,9 @@
+linux-rockchip (6.1.0-1031.31) noble; urgency=medium
+
+  * UBUNTU: Update is version number
+
+ -- Lemon1151 <smile1151@foxmail.com>  Sat, 16 Mar 2025 19:35:50 -0400
+
 linux-rockchip (6.1.0-1030.30) noble; urgency=medium
 
   * cpuinfo: Optimize CPU display rules to specifically show the CPU model
