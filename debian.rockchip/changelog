@@ -1,16 +1,16 @@
-linux-rockchip (5.10.0-1014.14) noble; urgency=medium
+linux-rockchip (5.10.0-1015.15) jammy; urgency=medium
 
   * UBUNTU: Upate is version number
 
  -- Lemon1151 <smile1151@foxmail.com>  Sat, 16 Mar 2025 19:36:18 -0400
 
-linux-rockchip (5.10.0-1014.14) noble; urgency=medium
+linux-rockchip (5.10.0-1014.14) jammy; urgency=medium
 
   * cpuinfo：Modify the model name display rule in cpuinfo.c
 
  -- Lemon1151 <smile1151@foxmail.com>  Sat, 24 Nov 2024 13:40:50 -0400
 
-linux-rockchip (5.10.0-1013.13) noble; urgency=medium
+linux-rockchip (5.10.0-1013.13) jammy; urgency=medium
 
   * add is cyber3588 aib borad
   * add rk3588-cyber3588-aib.dts
