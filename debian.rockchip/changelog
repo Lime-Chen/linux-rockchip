@@ -1,6 +1,7 @@
 linux-rockchip (5.10.0-1015.15) jammy; urgency=medium
 
   * UBUNTU: Upate is version number
+  * Driver: rknpu: Update rknpu driver, version: 0.9.8
 
  -- Lemon1151 <smile1151@foxmail.com>  Sat, 16 Mar 2025 19:36:18 -0400
 
